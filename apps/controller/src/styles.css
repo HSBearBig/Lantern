@@ -1,0 +1,58 @@
+:root { color-scheme: dark; font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #070b0f; color: #eaf0f4; font-synthesis: none; }
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; min-height: 100%; }
+button, input { font: inherit; }
+button { color: inherit; }
+body { background: radial-gradient(circle at 70% -20%, #17242a 0, transparent 42rem), #070b0f; }
+main { min-height: 100vh; display: flex; flex-direction: column; }
+header { min-height: 64px; padding: 12px 22px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #27333b; background: #0a0f14dd; backdrop-filter: blur(18px); }
+header > div { display: flex; align-items: center; gap: 10px; }
+h1 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
+.brand-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: #9be18a; color: #09200b; font-weight: 900; }
+.diagnostic { padding: 3px 7px; border-radius: 100px; background: #1d2a31; color: #9fb0b9; font-size: 11px; }
+.status { max-width: 55vw; color: #9fb0b9; font-size: 13px; text-align: right; }
+.status span { width: 8px; height: 8px; border-radius: 100%; background: #6e7d86; }
+.status.connected span { background: #75dc76; box-shadow: 0 0 12px #75dc76; }
+.status.error span { background: #ff7f76; }
+.notice { margin: 14px 20px 0; padding: 12px 16px; border: 1px solid #576f38; border-radius: 12px; background: #182212; }
+.notice p { display: inline; margin-left: 12px; color: #b2c29f; }
+.workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 260px 1fr; }
+aside { padding: 22px 14px; border-right: 1px solid #27333b; background: #0a0f14aa; }
+h2 { margin: 0 8px 14px; font-size: 13px; color: #82939d; text-transform: uppercase; letter-spacing: .08em; }
+.empty, .help { color: #84949d; line-height: 1.5; font-size: 13px; padding: 10px; }
+ul { padding: 0; margin: 0; list-style: none; }
+li { display: flex; align-items: center; border-radius: 12px; }
+li.selected { background: #1d2b31; }
+.device { flex: 1; display: flex; align-items: center; gap: 11px; min-width: 0; border: 0; padding: 10px; text-align: left; background: transparent; cursor: pointer; }
+.device:hover { background: #192329; border-radius: 12px; }
+.device span:last-child { min-width: 0; }
+.device strong, .device small { display: block; overflow: hidden; text-overflow: ellipsis; }
+.device small { color: #75858e; margin-top: 3px; font-family: ui-monospace, monospace; }
+.computer { color: #9be18a; font-size: 20px; }
+.remove { opacity: .55; border: 0; background: transparent; font-size: 20px; cursor: pointer; }
+.danger { width: 100%; margin-top: 16px; padding: 9px; border: 1px solid #70413f; border-radius: 9px; background: #251716; color: #ff9c95; cursor: pointer; }
+.help { margin-top: 30px; border-top: 1px solid #27333b; }
+.help p { margin-bottom: 0; }
+.viewer { min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 18px; }
+.remote-surface { position: relative; flex: 1; min-height: 360px; display: grid; place-items: center; overflow: hidden; border: 1px solid #2b383f; border-radius: 14px; background: #020304; touch-action: none; user-select: none; }
+.remote-surface video { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.video-placeholder { position: absolute; color: #64747d; font-size: 14px; }
+.controls { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+.controls button, .text-send input { min-height: 36px; border: 1px solid #34434b; border-radius: 9px; background: #11191e; }
+.controls button { padding: 0 12px; cursor: pointer; }
+.controls button.active { border-color: #9be18a; background: #20321e; color: #bdffad; }
+.controls button:disabled { opacity: .4; cursor: default; }
+.text-send { flex: 1; display: flex; gap: 7px; min-width: 280px; }
+.text-send input { flex: 1; padding: 0 11px; color: #fff; }
+.gesture-help { margin: 0; color: #71828b; font-size: 12px; }
+@media (max-width: 760px) {
+  header { padding: 10px 14px; } .diagnostic { display: none; }
+  .workspace { grid-template-columns: 1fr; }
+  aside { border-right: 0; border-bottom: 1px solid #27333b; padding: 12px; }
+  aside h2, .help { display: none; } aside ul { display: flex; overflow-x: auto; }
+  aside li { min-width: 210px; } .danger { width: auto; margin: 4px 8px; }
+  .viewer { min-height: calc(100vh - 170px); padding: 8px; }
+  .remote-surface { min-height: 45vh; border-radius: 9px; }
+  .controls { padding-bottom: env(safe-area-inset-bottom); }
+  .text-send { order: -1; flex-basis: 100%; min-width: 0; }
+}
