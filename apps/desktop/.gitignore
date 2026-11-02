@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.tsbuildinfo
+src-tauri/target/
+vite.config.js
+vite.config.d.ts
