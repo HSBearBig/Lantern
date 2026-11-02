@@ -1,0 +1,30 @@
+services:
+  signaling:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    environment:
+      LANTERN_ORIGIN: https://${LANTERN_DOMAIN:?Set LANTERN_DOMAIN in .env}
+      RUST_LOG: lantern_signaling=info
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [backend]
+  caddy:
+    image: caddy:2
+    environment:
+      LANTERN_DOMAIN: ${LANTERN_DOMAIN:?Set LANTERN_DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    networks: [backend]
+networks:
+  backend:
+volumes:
+  caddy_data:
+  caddy_config:

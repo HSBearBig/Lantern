@@ -1,0 +1,9 @@
+.git
+.omx
+target
+**/target
+**/node_modules
+**/dist
+**/test-results
+.env
+apps/desktop

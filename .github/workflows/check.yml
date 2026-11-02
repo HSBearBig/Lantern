@@ -1,0 +1,84 @@
+name: Checks
+on: [push, pull_request]
+jobs:
+  native:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - run: cargo build --locked --release -p lantern-host -p lantern-signaling
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.os }}
+          path: |
+            target/release/lantern-host*
+            target/release/lantern-signaling*
+  browser:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/controller
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm smoke
+        env:
+          PLAYWRIGHT_CHROMIUM: bundled
+  desktop:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.0
+      - run: pnpm install --frozen-lockfile
+        working-directory: apps/desktop
+      - run: pnpm build
+        working-directory: apps/desktop
+      - run: cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml --lib
+      - if: runner.os == 'macOS'
+        run: bash scripts/package-macos.sh
+      - if: runner.os == 'Windows'
+        run: pnpm tauri build --bundles nsis
+        working-directory: apps/desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            releases/*.dmg
+            releases/*.zip
+            releases/SHA256SUMS
+            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
