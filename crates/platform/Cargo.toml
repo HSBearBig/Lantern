@@ -1,0 +1,25 @@
+[package]
+name = "lantern-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+lantern-protocol.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.2"
+objc2-core-foundation = "0.3.2"
+objc2-core-graphics = { version = "0.3.2", features = ["CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGGeometry", "CGRemoteOperation", "CGWindow"] }
+objc2-core-media = "0.3.2"
+objc2-core-video = "0.3.2"
+objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSError", "NSString"] }
+objc2-screen-capture-kit = "0.3.2"
+objc2-video-toolbox = "0.3.2"
+
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = ["Foundation", "Graphics", "Graphics_Capture", "Graphics_DirectX", "Graphics_DirectX_Direct3D11", "Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_System_Ole", "Win32_System_Variant", "Win32_Graphics_Gdi", "Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_Memory", "Win32_System_WinRT", "Win32_System_WinRT_Direct3D11", "Win32_System_WinRT_Graphics_Capture", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }

@@ -1,0 +1,14 @@
+{
+  "description": "Public test-only WebCrypto vector; secret is intentionally public. No production identity.",
+  "parts": [
+    "lantern-offer-v1",
+    "host",
+    "browser",
+    "nonce",
+    "v=0\r\na=fingerprint:sha-256 00:11\r\n繁體中文🦀"
+  ],
+  "hostKey": "BHuUJY2mwcDt4RU99ETUC8plW2vrXEAN07BY1knfalOMR4pPHDjo2fkOOUWqbbjdOM1pmF_r9IglHfHa_c2eQKI",
+  "signature": "5lnVzTNKqlje9i60NxQ8CNdDUV4yJa9gxB7iWupdSfPFjDj9wzcNP9yvsvSbxm4a6mEjIxHfVECIC90j-cLsBg",
+  "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "proof": "75wQZjAS9ase98P_Z40GH5U0TepIp2fa6VY_vz0QXpA"
+}
