@@ -1027,8 +1027,9 @@ impl InputInjector for WindowsInput {
                 }
             }
             ControlEvent::Key { code, down } => {
-                let vk = virtual_key(code)
-                    .ok_or_else(|| anyhow!("unsupported KeyboardEvent.code: {code}"))?;
+                let Some(vk) = virtual_key(code) else {
+                    return Ok(());
+                };
                 Self::key(vk, *down)?;
                 if *down {
                     self.held_keys.insert(vk);

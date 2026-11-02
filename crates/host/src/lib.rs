@@ -406,7 +406,7 @@ pub async fn run(
                             if value["type"] == "registered" {
                                 let ephemeral = field(&value,"id")?; let nonce = field(&value,"nonce")?;
                                 let response = json!({"type":"register_host","key":host.store.host_key(),"signature":sign(host.store.signing_key(), &["lantern-register-v1",ephemeral,nonce])});
-                                ws.send(Message::Text(response.to_string().into())).await?;
+                                if ws.send(Message::Text(response.to_string().into())).await.is_err() { break; }
                             } else if value["type"] == "host_registered" {
                                 if value["id"] != host.status.host_id { bail!("Relay returned incorrect host identity"); }
                                 host.status.online = true; host.status.error = None; host.publish();
@@ -467,6 +467,87 @@ mod tests {
         assert!(c.validate().is_ok());
         c.server = Url::parse("https://user:pass@remote.example").unwrap();
         assert!(c.validate().is_err());
+    }
+    #[tokio::test]
+    async fn pairing_persists_then_revocation_rejects_reconnect() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::temporary(dir.path().join("pairs.json"));
+        let mut status = HostStatus::starting("Test".into());
+        status.host_id = store.host_id();
+        let (tx, _) = watch::channel(status.clone());
+        let mut h = Host {
+            config: config(),
+            store,
+            pairing: None,
+            pending: HashMap::new(),
+            session: None,
+            status,
+            updates: tx,
+        };
+        h.pair();
+        let invite = Url::parse(h.status.pairing_url.as_ref().unwrap()).unwrap();
+        let values: HashMap<_, _> =
+            url::form_urlencoded::parse(invite.fragment().unwrap().as_bytes())
+                .into_owned()
+                .collect();
+        let secret = B64.decode(&values["secret"]).unwrap();
+        let key = p256::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
+        let public = identity::public_key(&key);
+        let client = identity::device_id(&public).unwrap();
+        let nonce = random_nonce();
+        let proof = identity::mac(
+            &secret,
+            &[
+                "lantern-pair-v1",
+                &h.status.host_id,
+                &client,
+                &public,
+                &nonce,
+            ],
+        );
+        let request = json!({"type":"pair","clientId":client,"clientKey":public,"name":"Chrome","nonce":nonce,"proof":proof});
+        let ack = h.payload("browser-socket", &request).await.unwrap();
+        assert_eq!(ack["nonce"], nonce);
+        identity::verify_mac(
+            &secret,
+            ack["proof"].as_str().unwrap(),
+            &[
+                "lantern-pair-ok-v1",
+                &h.status.host_id,
+                &h.store.host_key(),
+                &client,
+                &nonce,
+            ],
+        )
+        .unwrap();
+        assert!(h.pairing.is_none());
+        assert!(h.status.pairing_url.is_none());
+        assert!(h.payload("browser-socket", &request).await.is_err());
+        h.store.pairs.clear();
+        h.store.reload_pairs().unwrap();
+        assert!(h.store.pairs.contains_key(&client));
+        let challenge = h
+            .payload(
+                "browser-socket",
+                &json!({"type":"connect","clientId":client}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(challenge["type"], "challenge");
+        h.command(HostCommand::Revoke(client.clone()))
+            .await
+            .unwrap();
+        assert!(h.pending.is_empty());
+        assert!(h
+            .payload(
+                "browser-socket",
+                &json!({"type":"connect","clientId":client})
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not_paired"));
     }
     #[tokio::test]
     async fn expired_or_replayed_challenge_never_opens_native_capture() {

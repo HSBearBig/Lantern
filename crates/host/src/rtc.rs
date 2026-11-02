@@ -157,7 +157,7 @@ impl Interceptor for KeyframeRequests {
 
 pub struct Session {
     pub stop: Arc<AtomicBool>,
-    peer: Box<dyn PeerConnection>,
+    peer: Option<Box<dyn PeerConnection>>,
     worker: JoinHandle<()>,
     stream: JoinHandle<()>,
 }
@@ -167,7 +167,9 @@ impl Session {
     }
     pub async fn close(mut self) {
         self.stop.store(true, Ordering::Release);
-        let _ = self.peer.close().await;
+        if let Some(peer) = self.peer.take() {
+            let _ = peer.close().await;
+        }
         self.stream.abort();
         let _ = tokio::time::timeout(Duration::from_secs(3), &mut self.worker).await;
     }
@@ -175,6 +177,14 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        self.stream.abort();
+        if let Some(peer) = self.peer.take() {
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    let _ = peer.close().await;
+                });
+            }
+        }
     }
 }
 
@@ -380,7 +390,7 @@ where
     Ok((
         Session {
             stop,
-            peer: Box::new(peer),
+            peer: Some(Box::new(peer)),
             worker,
             stream,
         },
@@ -443,6 +453,7 @@ fn pump_native(
     force: Arc<AtomicBool>,
 ) -> Result<()> {
     let mut order = InputOrder::default();
+    let mut waiting_idr = true;
     let result = (|| {
         tracing::info!(encoder = native.encoder.mode(), "native pipeline ready");
         while !stop.load(Ordering::Acquire) {
@@ -457,13 +468,17 @@ fn pump_native(
                 order.inject(native.input.as_mut(), &event)?;
             }
             if let Some(frame) = native.capture.next_frame(Duration::from_millis(35))? {
-                let requested = force.swap(false, Ordering::AcqRel);
+                let requested = force.swap(false, Ordering::AcqRel) || waiting_idr;
                 for encoded in native.encoder.encode(frame, requested)? {
-                    if force.load(Ordering::Acquire) && !encoded.keyframe {
+                    if waiting_idr && !encoded.keyframe {
                         continue;
                     }
+                    let keyframe = encoded.keyframe;
                     if frames.try_send(encoded).is_err() {
+                        waiting_idr = true;
                         force.store(true, Ordering::Release);
+                    } else if keyframe {
+                        waiting_idr = false;
                     }
                 }
             }

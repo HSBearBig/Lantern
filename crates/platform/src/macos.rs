@@ -11,8 +11,8 @@ use objc2_core_foundation::{
     CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGPoint,
 };
 use objc2_core_graphics::{
-    CGDisplayBounds, CGEvent, CGEventTapLocation, CGEventType, CGMainDisplayID, CGMouseButton,
-    CGPreflightScreenCaptureAccess, CGScrollEventUnit,
+    CGDisplayBounds, CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGMainDisplayID,
+    CGMouseButton, CGPreflightScreenCaptureAccess, CGScrollEventUnit,
 };
 use objc2_core_media::{
     kCMVideoCodecType_H264, CMFormatDescription, CMSampleBuffer, CMTime,
@@ -25,7 +25,7 @@ use objc2_core_video::{
 use objc2_foundation::{NSArray, NSError};
 use objc2_screen_capture_kit::{
     SCContentFilter, SCDisplay, SCShareableContent, SCStream, SCStreamConfiguration,
-    SCStreamDelegate, SCStreamOutput, SCStreamOutputType,
+    SCStreamDelegate, SCStreamFrameInfoStatus, SCStreamOutput, SCStreamOutputType,
 };
 use objc2_video_toolbox::{
     kVTCompressionPropertyKey_AllowFrameReordering, kVTCompressionPropertyKey_AverageBitRate,
@@ -157,6 +157,19 @@ define_class!(
             output_type: SCStreamOutputType,
         ) {
             if output_type != SCStreamOutputType::Screen {
+                return;
+            }
+            // Idle/started samples are notifications, not image frames. Treating their
+            // absent pixel buffers as errors would stop every static desktop stream.
+            let status = unsafe { sample_status(sample_buffer) };
+            if matches!(status, Some(2 | 3 | 5)) {
+                self.ivars().mailbox.stop(
+                    "Screen capture is blank, suspended or stopped; the desktop may be locked"
+                        .into(),
+                );
+                return;
+            }
+            if matches!(status, Some(1 | 4)) || sample_buffer.image_buffer().is_none() {
                 return;
             }
             // SAFETY: ScreenCaptureKit keeps the sample alive for this callback; the copy owns bytes.
@@ -340,6 +353,28 @@ impl Drop for MacCapture {
             Err(error) => tracing::warn!(%error, "timed out stopping ScreenCaptureKit stream"),
         }
     }
+}
+
+unsafe fn sample_status(sample: &CMSampleBuffer) -> Option<isize> {
+    let attachments = sample.sample_attachments_array(false)?;
+    if attachments.is_empty() {
+        return None;
+    }
+    // CoreMedia documents this array as CFMutableDictionary sample attachments.
+    // The array retains them for the duration of this callback.
+    let raw_attachment = attachments.value_at_index(0);
+    if raw_attachment.is_null() {
+        return None;
+    }
+    let attachment = &*raw_attachment.cast::<CFType>();
+    let dictionary = attachment.downcast_ref::<CFDictionary>()?;
+    let key = SCStreamFrameInfoStatus as *const _ as *const c_void;
+    let raw = dictionary.value(key);
+    if raw.is_null() {
+        return None;
+    }
+    let value = &*raw.cast::<CFType>();
+    value.downcast_ref::<CFNumber>()?.as_isize()
 }
 
 unsafe fn copy_sample_buffer(sample: &CMSampleBuffer) -> Result<RawFrame> {
@@ -760,6 +795,7 @@ impl MacInput {
                     "could not create mouse event; Accessibility permission may have been revoked"
                 )
             })?;
+        CGEvent::set_flags(Some(&event), modifier_flags(&self.held_keys));
         CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
         Ok(())
     }
@@ -770,6 +806,7 @@ impl MacInput {
                 "could not create keyboard event; Accessibility permission may have been revoked"
             )
         })?;
+        CGEvent::set_flags(Some(&event), modifier_flags(&self.held_keys));
         CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
         Ok(())
     }
@@ -825,17 +862,18 @@ impl InputInjector for MacInput {
                 CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&event));
             }
             ControlEvent::Key { code, down } => {
-                let keycode = keycode_for_dom_code(code)
-                    .ok_or_else(|| anyhow!("unsupported keyboard code: {code}"))?;
-                self.post_key(keycode, *down)?;
+                let Some(keycode) = keycode_for_dom_code(code) else {
+                    return Ok(());
+                };
                 if *down {
                     self.held_keys.insert(keycode);
                 } else {
                     self.held_keys.remove(&keycode);
                 }
+                self.post_key(keycode, *down)?;
             }
             ControlEvent::Text { text } => {
-                for chunk in text.encode_utf16().collect::<Vec<_>>().chunks(20) {
+                for chunk in unicode_chunks(text) {
                     let down = CGEvent::new_keyboard_event(None, 0, true)
                         .ok_or_else(|| anyhow!("could not create Unicode input event"))?;
                     unsafe {
@@ -845,6 +883,7 @@ impl InputInjector for MacInput {
                             chunk.as_ptr(),
                         )
                     };
+                    CGEvent::set_flags(Some(&down), CGEventFlags::empty());
                     CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&down));
                     let up = CGEvent::new_keyboard_event(None, 0, false)
                         .ok_or_else(|| anyhow!("could not create Unicode input event"))?;
@@ -855,6 +894,7 @@ impl InputInjector for MacInput {
                             chunk.as_ptr(),
                         )
                     };
+                    CGEvent::set_flags(Some(&up), CGEventFlags::empty());
                     CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&up));
                 }
             }
@@ -865,19 +905,27 @@ impl InputInjector for MacInput {
 
     fn release_all(&mut self) -> Result<()> {
         let keys: Vec<_> = self.held_keys.drain().collect();
-        for key in keys {
-            self.post_key(key, false)?;
-        }
         let buttons: Vec<_> = self.held_buttons.drain().collect();
+        let mut first_error = None;
+        for key in keys {
+            if let Err(error) = self.post_key(key, false) {
+                first_error.get_or_insert(error);
+            }
+        }
         for button in buttons {
             let (kind, native) = match button {
                 MouseButton::Left => (CGEventType::LeftMouseUp, CGMouseButton::Left),
                 MouseButton::Right => (CGEventType::RightMouseUp, CGMouseButton::Right),
                 MouseButton::Middle => (CGEventType::OtherMouseUp, CGMouseButton::Center),
             };
-            self.post_mouse(kind, native)?;
+            if let Err(error) = self.post_mouse(kind, native) {
+                first_error.get_or_insert(error);
+            }
         }
-        Ok(())
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 
@@ -887,6 +935,38 @@ impl Drop for MacInput {
             tracing::warn!(%error, "could not release macOS input state");
         }
     }
+}
+
+fn modifier_flags(held: &HashSet<u16>) -> CGEventFlags {
+    let mut flags = CGEventFlags::empty();
+    for code in held {
+        flags |= match code {
+            0x36 | 0x37 => CGEventFlags::MaskCommand,
+            0x38 | 0x3c => CGEventFlags::MaskShift,
+            0x3a | 0x3d => CGEventFlags::MaskAlternate,
+            0x3b | 0x3e => CGEventFlags::MaskControl,
+            _ => CGEventFlags::empty(),
+        };
+    }
+    flags
+}
+
+fn unicode_chunks(text: &str) -> Vec<Vec<u16>> {
+    let mut chunks = Vec::new();
+    let mut current = Vec::with_capacity(20);
+    for character in text.chars() {
+        let mut buffer = [0u16; 2];
+        let encoded = character.encode_utf16(&mut buffer);
+        if current.len() + encoded.len() > 20 {
+            chunks.push(current);
+            current = Vec::with_capacity(20);
+        }
+        current.extend_from_slice(encoded);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
 }
 
 fn keycode_for_dom_code(code: &str) -> Option<u16> {
@@ -1006,6 +1086,25 @@ fn keycode_for_dom_code(code: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn modifier_flags_follow_both_sides_and_clear_on_release() {
+        let held = HashSet::from([0x37, 0x3c, 0x3e]);
+        let flags = modifier_flags(&held);
+        assert!(flags.contains(
+            CGEventFlags::MaskCommand | CGEventFlags::MaskShift | CGEventFlags::MaskControl
+        ));
+        assert!(!flags.contains(CGEventFlags::MaskAlternate));
+        assert!(modifier_flags(&HashSet::new()).is_empty());
+    }
+    #[test]
+    fn unicode_batches_never_split_surrogate_pairs() {
+        let text = format!("{}🦀繁體中文", "a".repeat(19));
+        let chunks = unicode_chunks(&text);
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.len() <= 20 && String::from_utf16(chunk).is_ok()));
+        assert_eq!(String::from_utf16(&chunks.concat()).unwrap(), text);
+    }
 
     fn test_frame(width: u32) -> RawFrame {
         RawFrame {
