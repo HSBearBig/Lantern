@@ -97,4 +97,16 @@ Apple Silicon 內測包已產生於 `releases/`，可執行 `./scripts/package-m
 
 此目錄是獨立 Git repository，預設分支 `main`。依可驗證的實作階段提交。未設定 remote，也未推送到外部服務。
 
+## Container registry
+
+GitHub Actions 的 **Publish container** workflow 可在 `main` 手動執行：先建置並測試容器的 `/healthz`、首頁與網站資產，再推送 `linux/amd64`／`linux/arm64` 到 `ghcr.io/hsbearbig/lantern`。
+
+它使用專案的 `GITHUB_TOKEN`，不需要另存個人 registry 密碼。每次成功發布會產生 `latest` 與 `sha-<完整 commit SHA>` 標籤，並在 workflow summary 記錄 image digest。這個 workflow 不會因一般 push 自動發布。
+
+```sh
+docker pull ghcr.io/hsbearbig/lantern:latest
+```
+
+Package 的存取權由 GitHub Container Registry 設定決定；private package 拉取時需要 registry 登入。此 image 包含瀏覽器控制端與連線協調服務，被控端 App 另外安裝。
+
 套件腳本只允許 esbuild，使用 pnpm 10.26+ 的 `allowBuilds` 設定。[pnpm 官方設定說明](https://pnpm.io/10.x/settings#allowbuilds)

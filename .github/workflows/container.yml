@@ -1,0 +1,133 @@
+name: Publish container
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-lantern-container
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'HSBearBig/Lantern' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/hsbearbig/lantern
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Enable ARM64 builds
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build native smoke image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: lantern:smoke
+          cache-from: type=gha,scope=lantern
+          cache-to: type=gha,mode=max,scope=lantern
+
+      - name: Check container health and bundled website
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --name lantern-smoke \
+            --publish 127.0.0.1:18787:8787 \
+            --env LANTERN_ORIGIN=https://remote.example.com \
+            lantern:smoke
+          trap 'docker logs lantern-smoke; docker rm --force lantern-smoke' EXIT
+          python3 - <<'PY'
+          import json, re, time, urllib.request
+          base = 'http://127.0.0.1:18787'
+          for attempt in range(30):
+              try:
+                  with urllib.request.urlopen(base + '/healthz', timeout=2) as response:
+                      health = json.load(response)
+                  assert health == {'status': 'ok', 'protocol': 1}, health
+                  break
+              except (OSError, ValueError):
+                  if attempt == 29:
+                      raise
+                  time.sleep(1)
+          with urllib.request.urlopen(base + '/', timeout=5) as response:
+              assert response.headers.get_content_type() == 'text/html'
+              html = response.read().decode()
+          assert 'Lantern' in html
+          assets = re.findall(r'(?:src|href)="(/assets/[^"]+)"', html)
+          assert assets, 'No production assets in controller HTML'
+          for asset in assets:
+              with urllib.request.urlopen(base + asset, timeout=5) as response:
+                  assert response.status == 200
+                  assert response.headers.get_content_type() != 'text/html', asset
+                  assert response.read(), asset
+          print('Container health and bundled website passed')
+          PY
+
+      - name: Log in to GHCR using the repository token
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push AMD64 and ARM64 image
+        id: publish
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/HSBearBig/Lantern
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=Lantern browser controller and WebRTC signaling service
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha,scope=lantern
+          cache-to: type=gha,mode=max,scope=lantern
+
+      - name: Verify published manifest and record digest
+        env:
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw > "$RUNNER_TEMP/lantern-manifest.json"
+          python3 - <<'PY'
+          import json, os
+          with open(os.path.join(os.environ['RUNNER_TEMP'], 'lantern-manifest.json')) as stream:
+              manifest = json.load(stream)
+          platforms = {(m['platform']['os'], m['platform']['architecture']) for m in manifest['manifests']}
+          assert {('linux', 'amd64'), ('linux', 'arm64')} <= platforms, platforms
+          print('Published AMD64 and ARM64 manifests verified')
+          PY
+          {
+            echo '## Published Lantern image'
+            echo
+            echo "Image: \`$IMAGE:latest\`"
+            echo "Revision tag: \`$IMAGE:sha-$GITHUB_SHA\`"
+            echo "Digest: \`$DIGEST\`"
+            echo 'Platforms: linux/amd64, linux/arm64'
+            echo 'Container health and production website smoke test: passed'
+          } >> "$GITHUB_STEP_SUMMARY"
